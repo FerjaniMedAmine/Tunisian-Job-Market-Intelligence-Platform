@@ -10,5 +10,12 @@ wheels/
 .venv
 
 
-#data
+# Local datasets
 data/
+
+# Local credentials and notebook checkpoints
+.env
+.env.*
+!.env.example
+.aws/
+.ipynb_checkpoints/

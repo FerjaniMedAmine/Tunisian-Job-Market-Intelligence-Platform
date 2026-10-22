@@ -1,7 +1,7 @@
 [project]
 name = "data-engineering"
 version = "0.1.0"
-description = "Add your description here"
+description = "Tunisian job market ingestion and MinIO-backed analytical pipelines"
 readme = "README.md"
 authors = [
     { name = "amine", email = "amineferjani961@gmail.com" }
@@ -9,12 +9,26 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    "boto3>=1.43.115",
+    "pandas>=3.0.6",
     "pyarrow>=26.0.0",
+    "python-dotenv>=1.2.4",
     "requests>=2.34.2",
+]
+[project.optional-dependencies]
+exploration = [
+    "duckdb>=1.5.6",
 ]
 
 [project.scripts]
-data-engineering = "data_engineering:main"
+jobmarket-run = "data_engineering.pipeline:main"
+jobmarket-discover = "data_engineering.ingestion.discover:main"
+jobmarket-collect = "data_engineering.ingestion.collect:main"
+jobmarket-silver = "data_engineering.silver.pipeline:main"
+jobmarket-gold = "data_engineering.gold.pipeline:main"
+
+jobmarket-upload = "data_engineering.storage.upload:main"
+jobmarket-read = "data_engineering.storage.read:main"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
@@ -24,5 +38,4 @@ build-backend = "uv_build"
 dev = [
     "ipykernel>=7.4.0",
     "jupyterlab>=4.6.4",
-    "pandas>=3.0.6",
 ]

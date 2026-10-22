@@ -1,22 +1,4 @@
-"""
-Transform one Keejob bronze batch into a silver Parquet dataset.
-
-
-- Keep postings whose country is TN.
-- Remove unused JSON-LD and collection fields.
-- Convert date and timestamp columns.
-- Reject expiry dates earlier than publication dates.
-- Replace HTML descriptions with readable text.
-
-Bronze files remain unchanged.
-
-Usage:
-    uv run transform_keejob.py path/to/batch_report.json
-"""
-
-import argparse
-import json
-from pathlib import Path
+"""Pure Keejob bronze-to-silver cleaning rules established in the exploration notebook."""
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -39,22 +21,6 @@ DROP_COLUMNS = [
     "metadata.http_status",
     "metadata.content_type",
 ]
-
-
-def load_bronze(report_path):
-    with report_path.open(encoding="utf-8") as file:
-        report = json.load(file)
-
-    records = []
-
-    for saved in report["saved_records"]:
-        with Path(saved["bronze_path"]).open(encoding="utf-8") as file:
-            records.append(json.load(file))
-
-    if not records:
-        raise ValueError("The batch report references no saved records.")
-
-    return pd.json_normalize(records, sep=".")
 
 
 def extract_description_text(html):
@@ -125,34 +91,3 @@ def transform_jobs(bronze):
     ].map(extract_description_text)
 
     return silver.reset_index(drop=True)
-
-
-def save_silver(silver, report_path):
-    directory = Path("data") / "silver" / "keejob"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    output_path = directory / f"{report_path.stem}.parquet"
-
-    silver.to_parquet(
-        output_path,
-        engine="pyarrow",
-        index=False,
-    )
-
-    return output_path
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("report", type=Path)
-    args = parser.parse_args()
-
-    bronze = load_bronze(args.report)
-    silver = transform_jobs(bronze)
-    output_path = save_silver(silver, args.report)
-
-    print("Input observations:", len(bronze))
-    print("Excluded by country filter:", len(bronze) - len(silver))
-    print("Silver rows:", len(silver))
-    print("Silver columns:", len(silver.columns))
-    print("Saved to:", output_path)

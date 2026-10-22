@@ -1,0 +1,12 @@
+.git/
+.venv/
+.env
+.env.*
+.aws/
+.codex/
+.agents/
+data/
+notebooks/
+**/__pycache__/
+**/*.pyc
+**/.ipynb_checkpoints/

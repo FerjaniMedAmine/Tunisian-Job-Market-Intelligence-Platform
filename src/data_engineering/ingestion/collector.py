@@ -1,22 +1,28 @@
-# Parse the HTML.
-# Find the JSON-LD script blocks.
-# Convert each block’s text into a Python object.
-# Return the object whose type is JobPosting.
-# Raise an error if none matches.
-
+"""Extract Keejob JobPosting objects and preserve bronze observations in MinIO."""
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 import requests
 from bs4 import BeautifulSoup
 
+from data_engineering.storage.s3 import write_json
 
-URL = (
-    "https://www.keejob.com/offres-emploi/"
-    "248502/analyste-fonctionnel-erp/"
-)
+
+def save_record_to_minio(client, record):
+    """Save a bronze observation in MinIO and return its object key."""
+    source = record["metadata"]["source"]
+    collection_date = record["metadata"]["collected_at"][:10]
+
+    key = (
+        f"bronze/{source}/"
+        f"collection_date={collection_date}/"
+        f"{uuid4().hex}.json"
+    )
+
+    write_json(client, record, key)
+
+    return key
 
 
 def extract_job_posting(html):
@@ -60,29 +66,3 @@ def collect_job(url):
     }
 
 
-def save_record(record):
-    collection_date = record["metadata"]["collected_at"][:10]
-
-    directory = (
-        Path("data")
-        / "bronze"
-        / "keejob"
-        / f"collection_date={collection_date}"
-    )
-    directory.mkdir(parents=True, exist_ok=True)
-
-    output_path = directory / f"{uuid4().hex}.json"
-
-    with output_path.open("x", encoding="utf-8") as file:
-        json.dump(record, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-
-    return output_path
-
-
-if __name__ == "__main__":
-    record = collect_job(URL)
-    output_path = save_record(record)
-
-    print("Collected:", record["payload"].get("title"))
-    print("Saved to:", output_path)
