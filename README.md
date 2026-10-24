@@ -35,41 +35,48 @@ This is object storage organized into bronze, silver, and gold layers, **not yet
 
 ```text
 .
-├── src/data_engineering/
-│   ├── pipeline.py          # Sequential runner and pipeline report
-│   ├── ingestion/
-│   │   ├── discover.py      # Pagination, retries, checkpoints, resume
-│   │   ├── collector.py     # JSON-LD extraction and bronze writer
-│   │   └── collect.py       # Batch collection and collection report
-│   ├── storage/
-│   │   ├── connection.py    # Configuration, Boto3 session/client
-│   │   ├── s3.py            # Bucket and JSON/Parquet object operations
-│   │   ├── query.py         # DuckDB SQL against remote Parquet
-│   │   ├── read.py          # Parquet preview command
-│   │   └── upload.py        # Single-file upload command
-│   ├── silver/              # Cleaning, validation, publication
-│   └── gold/                # Analytical models and publication
-├── notebooks/
-│   ├── bronze_exploration.ipynb
-│   ├── gold_exploration.ipynb
-│   └── playground.ipynb
+├── pipeline/
+│   ├── pyproject.toml       # ETL package and runtime dependencies
+│   ├── uv.lock
+│   ├── .python-version
+│   ├── .dockerignore       # Filters the pipeline build context
+│   ├── README.md
+│   └── src/data_engineering/
+│       ├── pipeline.py     # Sequential runner and execution report
+│       ├── ingestion/      # Discovery, collection, bronze publication
+│       ├── silver/         # Cleaning, validation, publication
+│       ├── gold/           # Analytical models and publication
+│       └── storage/        # MinIO connection and object operations
+├── exploration/
+│   ├── pyproject.toml       # pandas, DuckDB, storage and notebook dependencies
+│   ├── uv.lock
+│   ├── .python-version
+│   ├── README.md
+│   ├── notebooks/          # Empty notebooks reserved for future exploration
+│   └── src/jobmarket_exploration/
+│       └── storage/        # MinIO access and DuckDB SQL helpers
 ├── docker/
-│   ├── minio/Dockerfile     # Builds the selected MinIO source release
-│   ├── pipeline/Dockerfile  # Python application image with locked dependencies
+│   ├── minio/Dockerfile
+│   ├── pipeline/Dockerfile
 │   └── superset/
-│       ├── Dockerfile      # Extends Apache Superset 6.1.0
-│       ├── requirements.txt # DuckDB, SQLAlchemy dialect, PostgreSQL driver
-│       ├── superset_config.py # Metadata database and connection hook
-│       └── gold_connection.py # MinIO authentication and gold SQL views
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       ├── superset_config.py
+│       └── gold_connection.py
 ├── docker-compose.yml
-├── .dockerignore
 ├── .env.example
-├── pyproject.toml
-├── uv.lock
-└── data/                    # Historical local data used by exploration notebooks
+└── README.md
 ```
 
-The notebooks and historical local files are preserved. The packaged pipeline is the repeatable implementation; notebook experiments do not automatically update it.
+Pipeline and exploration are independent Python projects, each with its own lockfile
+and virtual environment. The pipeline has no DuckDB or Jupyter dependency.
+Exploration uses its own storage helpers and does not import the pipeline package.
+Storage helpers currently exist in both packages; changes to shared behavior need
+review in both places. The three notebooks are intentionally empty.
+
+There is no root Python project or local `data/` directory. Active datasets live
+in MinIO. Compose uses the stable project name `dataengineering` so renaming the
+checkout does not change its container or volume names.
 
 ## Setup and storage
 
@@ -95,13 +102,18 @@ SUPERSET_SECRET_KEY=replace_with_a_generated_secret
 GOLD_MANIFEST_KEY=gold/keejob/replace_with_your_batch_id/manifest.json
 ```
 
-The bucket is configurable; object keys below are relative to it. Replace the gold manifest placeholder with an existing published manifest key, without the bucket or `s3://` prefix. The environment variables above are required by the current Compose file, including when selecting an individual service. Credentials are excluded from Git and the pipeline Docker build context. The pipeline image copies application source, package metadata, and the lockfile, not local datasets or notebooks. Superset's build context is only `docker/superset/` and does not include the pipeline package.
+The bucket is configurable; object keys below are relative to it. Replace the gold manifest placeholder with an existing published manifest key, without the bucket or `s3://` prefix. The environment variables above are required by the current Compose file, including when selecting an individual service. Credentials are excluded from Git and the pipeline Docker build context. The pipeline build context is `pipeline/`, filtered by `pipeline/.dockerignore`; its Dockerfile copies that directory into `/app`. Exploration and root credentials are outside this context. Superset's build context is only `docker/superset/` and does not include the pipeline package.
 
-Install the package and notebook dependencies locally:
+Local installation is optional when running ETL in Docker. To install the pipeline
+on the host, run from the repository root:
 
 ```bash
-uv sync --locked --extra exploration
+cd pipeline
+uv sync --locked
+cd ..
 ```
+
+Exploration has separate setup instructions below.
 
 Start MinIO and build the pipeline image:
 
@@ -114,7 +126,7 @@ docker compose build pipeline
 - `build pipeline` builds the application image without running a collection.
 - Compose automatically reads `docker-compose.yml` and takes configuration values from the project's `.env`.
 
-MinIO is built from a pinned source release. The pipeline image uses Python 3.12 and installs the locked application without notebook dependencies or the optional DuckDB exploration extra. pandas and PyArrow remain runtime dependencies because ETL uses them. Superset installs its DuckDB dependencies independently.
+MinIO is built from a pinned source release. The pipeline image uses Python 3.12 and installs only the dependencies declared in `pipeline/pyproject.toml`, using `pipeline/uv.lock`. pandas and PyArrow remain runtime dependencies because ETL uses them. Superset installs its DuckDB dependencies independently.
 
 | Access location | Endpoint |
 |---|---|
@@ -165,7 +177,7 @@ docker compose run --rm superset superset init
 docker compose up -d superset
 ```
 
-`db upgrade` creates or migrates the metadata tables; `create-admin` prompts for the website administrator account; `init` synchronizes built-in roles and permissions. These credentials are independent of PostgreSQL and MinIO credentials. Normal subsequent startup uses `docker compose up -d minio superset`. Superset waits for PostgreSQL's health check; MinIO must also be available when an analytical connection is opened.
+`db upgrade` creates or migrates the metadata tables; `create-admin` prompts for the website administrator account; `init` synchronizes built-in roles and permissions. These credentials are independent of PostgreSQL and MinIO credentials. Normal subsequent startup uses `docker compose up -d minio superset-db superset`. Superset waits for PostgreSQL's health check; MinIO must also be available when an analytical connection is opened.
 
 Open the website and register a database connection named **Tunisian Job Market**, using the DuckDB backend and this SQLAlchemy URI:
 
@@ -240,10 +252,12 @@ docker compose run --rm pipeline jobmarket-run --manifest-key "$manifest_key" --
 
 `--manifest-key` cannot be combined with `--max-pages` or `--resume-discovery`. `--all` and `--limit` are mutually exclusive. Page and posting limits must be positive integers.
 
-The same command runs without the pipeline container:
+The same command runs without the pipeline container, from the repository root:
 
 ```bash
+cd pipeline
 uv run jobmarket-run --max-pages 1 --limit 5
+cd ..
 ```
 
 After source or dependency changes, rebuild with `docker compose build pipeline` before using the container again. A successful execution prints both the pipeline report key and the published gold manifest key.
@@ -273,7 +287,7 @@ Resume writes to a new checkpoint and records `resumed_from`; the original check
 
 ## Run individual stages
 
-Each stage has an installed command and reusable function. The functions return the key needed by the next stage:
+For the local commands in this section, first run `cd pipeline` from the repository root; return with `cd ..` before running Compose commands. Each stage has an installed command and reusable function. The functions return the key needed by the next stage:
 
 ```python
 manifest_key = run_discovery(client)
@@ -282,7 +296,7 @@ silver_key = run_silver(client, report_key)
 gold_manifest_key = run_gold(client, silver_key)
 ```
 
-These functions live in `ingestion/discover.py`, `ingestion/collect.py`, `silver/pipeline.py`, and `gold/pipeline.py`. In Python, `limit=None` means all URLs; commands use `--all`.
+These functions live under `pipeline/src/data_engineering/` in `ingestion/discover.py`, `ingestion/collect.py`, `silver/pipeline.py`, and `gold/pipeline.py`. In Python, `limit=None` means all URLs; commands use `--all`.
 
 Discover one page:
 
@@ -357,22 +371,28 @@ This is a publication convention, not a multi-object transaction. Failed uploads
 
 ## Exploration with pandas and SQL
 
-Start Jupyter locally:
+From the repository root, install the independent exploration environment and start Jupyter:
 
 ```bash
-uv run --extra exploration jupyter lab
+cd exploration
+uv sync --locked
+uv run jupyter lab
 ```
 
-The preserved notebooks cover bronze exploration, gold exploration, and experiments. Existing notebook references to historical `data/...` files remain relevant; current pipeline outputs are read from MinIO.
+Choose `exploration/.venv` as the Python environment when using another notebook
+editor. The notebooks are intentionally empty placeholders. Read current datasets
+from MinIO using the helpers below; no local data folder is required. Both Python
+projects load the repository-root `.env` through python-dotenv. Host Python uses
+`http://127.0.0.1:19000`; containers receive `http://minio:9000` from Compose.
 
 `storage.s3.read_json(client, key)` reads an object as Python data. `read_parquet(client, key)` downloads the complete small Parquet object into a pandas DataFrame. `storage.query.query_parquet(session, key, sql)` instead lets DuckDB query remote Parquet through S3 and returns the query result as a DataFrame. SQL refers to that object using the temporary view name `dataset`.
 
 For example, paste a published gold manifest key when prompted:
 
 ```python
-from data_engineering.storage.connection import create_client, create_session
-from data_engineering.storage.query import query_parquet
-from data_engineering.storage.s3 import read_json
+from jobmarket_exploration.storage.connection import create_client, create_session
+from jobmarket_exploration.storage.query import query_parquet
+from jobmarket_exploration.storage.s3 import read_json
 
 session = create_session()
 client = create_client(session)
@@ -398,14 +418,10 @@ companies
 
 The helper opens one in-memory DuckDB connection per call and installs/loads `httpfs`; the initial extension download may need internet. It uses the Boto3 session credentials and configured endpoint; temporary AWS session tokens are not yet supported. DuckDB runs inside Python, without a shared SQL server.
 
-For a terminal preview of a Parquet object:
-
-```bash
-read -r -p 'Parquet object key: ' parquet_key
-uv run jobmarket-read "$parquet_key"
-```
-
-The separate `jobmarket-upload` command uploads one existing local file and checks its stored byte length. Run `uv run jobmarket-upload --help` for its arguments. There is no bulk synchronization command in the active workflow.
+For a pandas preview, import `read_parquet` from
+`jobmarket_exploration.storage.s3` and call `read_parquet(client, key)` in a
+notebook. The former `jobmarket-read` and `jobmarket-upload` commands have been
+removed; object access is available through the Python helpers.
 
 ## Transformation rules and business measures
 
@@ -419,6 +435,12 @@ Silver keeps only records whose source country equals `TN`; bronze payloads rema
 - Preserves salary bounds and locality names; geographic mappings are deferred.
 
 Quality checks reject empty silver data, missing or blank identity/content fields, duplicate `(source, job_id)` identities within the batch, and disclosed salary bounds that are nonnumeric, infinite, negative, or reversed. Missing salaries are allowed. Validation must pass before silver is saved.
+
+Exploration has also exposed suspicious positive salary bounds, including `1–2`,
+`9.998–9.999`, and unusually wide ranges. These currently pass validation.
+Extrema should be interpreted cautiously until source values are investigated and
+explicit cleaning rules are agreed. No arbitrary salary cutoff or null conversion
+has been implemented.
 
 | Gold dataset | Grain and measure |
 |---|---|
@@ -445,3 +467,13 @@ Possible next milestones are intentionally separate from the implemented stack:
 - Automated BI publication selection, dashboard exports, and integration verification.
 
 Superset provides the BI website; there is no custom frontend or FastAPI service. PostgreSQL is used only for Superset metadata. Remote/cloud deployment, a scheduler, Airflow DAGs, Kafka streaming, Spark processing, a dbt project, a feature store, ML models, and Iceberg/Delta tables are not implemented. pandas, DuckDB SQL, and Superset are the current analysis interfaces.
+
+## Validation
+
+After separating the projects, the pipeline image built successfully and a small
+container run completed discovery, collection, silver transformation, and gold
+publication against MinIO: one listing page, 17 candidate URLs, five successful
+collections, five silver rows, and all four gold datasets. DuckDB and Jupyter
+were absent from the pipeline dependency set. Exploration configuration and
+Python syntax were checked; its separate environment has not yet received an
+end-to-end MinIO query test. This is not a comprehensive automated test suite.

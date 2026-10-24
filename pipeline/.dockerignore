@@ -1,0 +1,11 @@
+.venv/
+.env
+.env.*
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+build/
+dist/

@@ -3,7 +3,7 @@
 from urllib.parse import urlsplit
 
 import duckdb
-from data_engineering.storage.connection import BUCKET, create_client
+from jobmarket_exploration.storage.connection import BUCKET, create_client
 def _sql_literal(value):
     """Escape a string used as a SQL literal."""
     return "'" + value.replace("'", "''") + "'"
